@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Социальная сеть</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .hidden { display: none; }
+        .post { 
+            border: 1px solid #ccc; 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .private-post { 
+            border-left: 4px solid #ff6b6b;
+            background-color: #fff5f5;
+        }
+        button { 
+            margin: 5px; 
+            padding: 5px 10px; 
+            cursor: pointer;
+        }
+        textarea, input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            box-sizing: border-box;
+        }
+        .comment {
+            margin: 5px 0;
+            padding: 5px;
+            background-color: #e9e9e9;
+            border-radius: 3px;
+        }
+        .subscriptions {
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Социальная сеть</h1>
+
+    <div id="authSection">
+        <h2>Регистрация / Вход</h2>
+        <input type="text" id="username" placeholder="Имя пользователя">
+        <button id="login">Войти / Зарегистрироваться</button>
+    </div>
+
+    <div class="hidden" id="userSection">
+        <h2>Добро пожаловать, <span id="currentUsername"></span>!</h2>
+        
+        <div class="subscriptions">
+            <h3>Подписки</h3>
+            <input type="text" id="subscribeTo" placeholder="Имя пользователя для подписки">
+            <button id="subscribeBtn">Подписаться</button>
+            <div id="subscriptionsList"></div>
+        </div>
+
+        <div>
+            <h3>Создать пост</h3>
+            <textarea id="postContent" placeholder="Ваш пост"></textarea>
+            <input type="text" id="postTags" placeholder="Теги (через запятую)">
+            <label>
+                <input type="checkbox" id="isPrivate"> Приватный пост
+            </label>
+            <button id="createPost">Создать пост</button>
+        </div>
+
+        <div>
+            <h3>Мои посты</h3>
+            <div id="myPosts"></div>
+        </div>
+    </div>
+
+    <div>
+        <h2>Лента постов</h2>
+        <div id="postList"></div>
+    </div>
+
+    <script>
+        class User {
+            constructor(username) {
+                this.username = username;
+                this.subscriptions = [];
+                this.posts = [];
+                this.privatePostRequests = [];
+            }
+
+            subscribe(otherUser) {
+                if (otherUser !== this && !this.subscriptions.includes(otherUser)) {
+                    this.subscriptions.push(otherUser);
+                    return true;
+                }
+                return false;
+            }
+
+            createPost(content, tags = [], isPrivate = false) {
+                const post = new Post(content, this, tags, isPrivate);
+                this.posts.push(post);
+                return post;
+            }
+
+            getPublicPosts() {
+                return this.posts.filter(post => !post.isPrivate);
+            }
+
+            requestPrivatePost(post) {
+                if (post.isPrivate && !post.requests.includes(this)) {
+                    post.requests.push(this);
+                    post.author.privatePostRequests.push({
+                        postId: post.id,
+                        requester: this.username
+                    });
+                    return true;
+                }
+                return false;
+            }
+
+            editPost(post, newContent, newTags) {
+                if (this.posts.includes(post)) {
+                    post.content = newContent;
+                    post.tags = newTags;
+                    return true;
+                }
+                return false;
+            }
+
+            deletePost(post) {
+                const index = this.posts.indexOf(post);
+                if (index !== -1) {
+                    this.posts.splice(index, 1);
+                    return true;
+                }
+                return false;
+            }
+
+            approveRequest(post, requester) {
+                const requestIndex = this.privatePostRequests.findIndex(
+                    req => req.postId === post.id && req.requester === requester.username
+                );
+                if (requestIndex !== -1) {
+                    this.privatePostRequests.splice(requestIndex, 1);
+                    post.approvedViewers.push(requester);
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        class Post {
+            static lastId = 0;
+            
+            constructor(content, author, tags = [], isPrivate = false) {
+                this.id = Post.lastId++;
+                this.content = content;
+                this.author = author;
+                this.tags = tags;
+                this.isPrivate = isPrivate;
+                this.comments = [];
+                this.requests = [];
+                this.approvedViewers = [];
+                this.createdAt = new Date();
+            }
+
+            canView(user) {
+                return !this.isPrivate || 
+                       this.author === user || 
+                       this.approvedViewers.includes(user);
+            }
+
+            addComment(comment, author) {
+                this.comments.push({
+                    author: author.username,
+                    text: comment,
+                    createdAt: new Date()
+                });
+            }
+        }
+
+        // Основное приложение
+        let currentUser = null;
+        let allUsers = [];
+        let allPosts = [];
+
+        document.getElementById('login').addEventListener('click', () => {
+            const username = document.getElementById('username').value.trim();
+            if (username) {
+                let user = allUsers.find(u => u.username === username);
+                if (!user) {
+                    user = new User(username);
+                    allUsers.push(user);
+                }
+                currentUser = user;
+                document.getElementById('authSection').classList.add('hidden');
+                document.getElementById('userSection').classList.remove('hidden');
+                document.getElementById('currentUsername').textContent = currentUser.username;
+                renderAll();
+            }
+        });
+
+        document.getElementById('subscribeBtn').addEventListener('click', () => {
+            const username = document.getElementById('subscribeTo').value.trim();
+            if (username) {
+                const userToSubscribe = allUsers.find(u => u.username === username);
+                if (userToSubscribe && currentUser.subscribe(userToSubscribe)) {
+                    renderSubscriptions();
+                    document.getElementById('subscribeTo').value = '';
+                }
+            }
+        });
+
+        document.getElementById('createPost').addEventListener('click', () => {
+            const content = document.getElementById('postContent').value.trim();
+            if (content) {
+                const tags = document.getElementById('postTags').value.split(',').map(t => t.trim()).filter(t => t);
+                const isPrivate = document.getElementById('isPrivate').checked;
+                const post = currentUser.createPost(content, tags, isPrivate);
+                allPosts.push(post);
+                renderAll();
+                document.getElementById('postContent').value = '';
+                document.getElementById('postTags').value = '';
+                document.getElementById('isPrivate').checked = false;
+            }
+        });
+
+        function renderAll() {
+            renderSubscriptions();
+            renderMyPosts();
+            renderPostList();
+        }
+
+        function renderSubscriptions() {
+            const list = document.getElementById('subscriptionsList');
+            list.innerHTML = '';
+            if (currentUser.subscriptions.length === 0) {
+                list.innerHTML = '<p>Вы пока ни на кого не подписаны</p>';
+            } else {
+                const ul = document.createElement('ul');
+                currentUser.subscriptions.forEach(user => {
+                    const li = document.createElement('li');
+                    li.textContent = user.username;
+                    ul.appendChild(li);
+                });
+                list.appendChild(ul);
+            }
+        }
+
+        function renderMyPosts() {
+            const container = document.getElementById('myPosts');
+            container.innerHTML = '';
+            
+            if (currentUser.posts.length === 0) {
+                container.innerHTML = '<p>У вас пока нет постов</p>';
+                return;
+            }
+
+            currentUser.posts.forEach(post => {
+                const postDiv = document.createElement('div');
+                postDiv.className = `post ${post.isPrivate ? 'private-post' : ''}`;
+                postDiv.innerHTML = `
+                    <strong>${post.author.username}</strong> 
+                    ${post.isPrivate ? '(приватный)' : ''}
+                    <small>${post.createdAt.toLocaleString()}</small>
+                    <p>${post.content}</p>
+                    ${post.tags.length ? `<small>Теги: ${post.tags.join(', ')}</small><br>` : ''}
+                    <button onclick="editPostPrompt(${post.id})">Редактировать</button>
+                    <button onclick="deletePost(${post.id})">Удалить</button>
+                    <div id="comments-${post.id}"></div>
+                    <input type="text" id="commentInput-${post.id}" placeholder="Ваш комментарий">
+                    <button onclick="addComment(${post.id})">Добавить комментарий</button>
+                `;
+                
+                // Показываем запросы на приватные посты
+                if (post.isPrivate && post.requests.length > 0) {
+                    const requestsDiv = document.createElement('div');
+                    requestsDiv.innerHTML = '<h4>Запросы на доступ:</h4>';
+                    post.requests.forEach(user => {
+                        const reqDiv = document.createElement('div');
+                        reqDiv.innerHTML = `
+                            ${user.username} 
+                            <button onclick="approveRequest(${post.id}, '${user.username}')">Разрешить</button>
+                        `;
+                        requestsDiv.appendChild(reqDiv);
+                    });
+                    postDiv.appendChild(requestsDiv);
+                }
+                
+                // Показываем комментарии
+                const commentsDiv = postDiv.querySelector(`#comments-${post.id}`);
+                post.comments.forEach(comment => {
+                    const commentDiv = document.createElement('div');
+                    commentDiv.className = 'comment';
+                    commentDiv.innerHTML = `
+                        <strong>${comment.author}</strong>: ${comment.text}
+                        <small>${new Date(comment.createdAt).toLocaleString()}</small>
+                    `;
+                    commentsDiv.appendChild(commentDiv);
+                });
+                
+                container.appendChild(postDiv);
+            });
+        }
+
+        function renderPostList() {
+            const container = document.getElementById('postList');
+            container.innerHTML = '';
+            
+            // Собираем все посты, которые может видеть текущий пользователь
+            const visiblePosts = [];
+            
+            // Посты текущего пользователя
+            visiblePosts.push(...currentUser.posts);
+            
+            // Публичные посты других пользователей
+            allUsers.forEach(user => {
+                if (user !== currentUser) {
+                    visiblePosts.push(...user.getPublicPosts());
+                }
+            });
+            
+            // Приватные посты, к которым есть доступ
+            allUsers.forEach(user => {
+                if (user !== currentUser) {
+                    user.posts.forEach(post => {
+                        if (post.isPrivate && post.approvedViewers.includes(currentUser)) {
+                            visiblePosts.push(post);
+                        }
+                    });
+                }
+            });
+            
+            // Удаляем дубликаты (если есть)
+            const uniquePosts = [...new Map(visiblePosts.map(post => [post.id, post])).values()];
+            
+            // Сортируем по дате (новые сначала)
+            uniquePosts.sort((a, b) => b.createdAt - a.createdAt);
+            
+            if (uniquePosts.length === 0) {
+                container.innerHTML = '<p>Нет постов для отображения</p>';
+                return;
+            }
+            
+            uniquePosts.forEach(post => {
+                const canView = post.canView(currentUser);
+                const isAuthor = post.author === currentUser;
+                
+                const postDiv = document.createElement('div');
+                postDiv.className = `post ${post.isPrivate ? 'private-post' : ''}`;
+                
+                if (canView) {
+                    postDiv.innerHTML = `
+                        <strong>${post.author.username}</strong> 
+                        ${post.isPrivate ? '(приватный)' : ''}
+                        <small>${post.createdAt.toLocaleString()}</small>
+                        <p>${post.content}</p>
+                        ${post.tags.length ? `<small>Теги: ${post.tags.join(', ')}</small><br>` : ''}
+                        ${!isAuthor ? `<button onclick="requestPrivatePost(${post.id})">Запросить доступ</button>` : ''}
+                        <div id="feed-comments-${post.id}"></div>
+                        <input type="text" id="feed-commentInput-${post.id}" placeholder="Ваш комментарий">
+                        <button onclick="addFeedComment(${post.id})">Добавить комментарий</button>
+                    `;
+                    
+                    // Показываем комментарии
+                    const commentsDiv = postDiv.querySelector(`#feed-comments-${post.id}`);
+                    post.comments.forEach(comment => {
+                        const commentDiv = document.createElement('div');
+                        commentDiv.className = 'comment';
+                        commentDiv.innerHTML = `
+                            <strong>${comment.author}</strong>: ${comment.text}
+                            <small>${new Date(comment.createdAt).toLocaleString()}</small>
+                        `;
+                        commentsDiv.appendChild(commentDiv);
+                    });
+                } else {
+                    postDiv.innerHTML = `
+                        <strong>${post.author.username}</strong> (приватный пост)
+                        <button onclick="requestPrivatePost(${post.id})">Запросить доступ</button>
+                    `;
+                }
+                
+                container.appendChild(postDiv);
+            });
+        }
+
+        // Функции для работы с постами
+        function editPostPrompt(postId) {
+            const post = allPosts.find(p => p.id === postId);
+            if (post && post.author === currentUser) {
+                const newContent = prompt("Редактировать пост:", post.content);
+                if (newContent !== null) {
+                    const newTags = prompt("Теги (через запятую):", post.tags.join(', '));
+                    currentUser.editPost(post, newContent, newTags ? newTags.split(',').map(t => t.trim()).filter(t => t) : []);
+                    renderAll();
+                }
+            }
+        }
+
+        function deletePost(postId) {
+            const post = allPosts.find(p => p.id === postId);
+            if (post && post.author === currentUser) {
+                if (confirm("Удалить этот пост?")) {
+                    currentUser.deletePost(post);
+                    allPosts = allPosts.filter(p => p.id !== postId);
+                    renderAll();
+                }
+            }
+        }
+
+        function addComment(postId) {
+            const post = allPosts.find(p => p.id === postId);
+            if (post) {
+                const commentInput = document.getElementById(`commentInput-${postId}`);
+                const comment = commentInput.value.trim();
+                if (comment) {
+                    post.addComment(comment, currentUser);
+                    commentInput.value = '';
+                    renderAll();
+                }
+            }
+        }
+
+        function addFeedComment(postId) {
+            const post = allPosts.find(p => p.id === postId);
+            if (post && post.canView(currentUser)) {
+                const commentInput = document.getElementById(`feed-commentInput-${postId}`);
+                const comment = commentInput.value.trim();
+                if (comment) {
+                    post.addComment(comment, currentUser);
+                    commentInput.value = '';
+                    renderAll();
+                }
+            }
+        }
+
+        function requestPrivatePost(postId) {
+            const post = allPosts.find(p => p.id === postId);
+            if (post && post.isPrivate && post.author !== currentUser && !post.requests.includes(currentUser)) {
+                if (confirm(`Запросить доступ к приватному посту пользователя ${post.author.username}?`)) {
+                    currentUser.requestPrivatePost(post);
+                    renderAll();
+                    alert("Запрос отправлен. Ожидайте одобрения автора.");
+                }
+            }
+        }
+
+        function approveRequest(postId, requesterUsername) {
+            const post = allPosts.find(p => p.id === postId);
+            const requester = allUsers.find(u => u.username === requesterUsername);
+            if (post && requester && post.author === currentUser) {
+                currentUser.approveRequest(post, requester);
+                renderAll();
+            }
+        }
+    </script>
+</body>
+</html>
